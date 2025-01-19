@@ -28,25 +28,21 @@ def get_valid_moves(board, stone):
                     break
     return moves
 
-def generate_data_with_strong_ai(ai, num_samples=1000):
+# データ生成の高速化 (簡易AIに変更)
+def generate_data_with_simple_ai(num_samples=200):
     X_train = []
     Y_train = []
     for _ in range(num_samples):
-        # ランダムに初期盤面を生成
-        board = [[random.choice([0, 1, 2]) for _ in range(6)] for _ in range(6)]
-        board[2][2], board[2][3], board[3][2], board[3][3] = 1, 2, 2, 1  # 中央は固定
-
-        stone = random.choice([1, 2])  # ランダムに黒か白を選ぶ
-
-        # 強いAIに最適な手を計算させる
-        move = ai.place(board, stone)
-        if move is None:
+        board = np.zeros((6, 6), dtype=int)
+        board[2][2], board[2][3], board[3][2], board[3][3] = 1, 2, 2, 1
+        stone = random.choice([1, 2])
+        valid_moves = get_valid_moves(board, stone)
+        if not valid_moves:
             continue
-
-        # データに追加
+        move = random.choice(valid_moves)
         X_train.append(board)
-        Y_train.append(move[1] * 6 + move[0])  # (y * 6 + x)形式で記録
-    return X_train, Y_train
+        Y_train.append(move[1] * 6 + move[0])
+    return np.array(X_train), np.array(Y_train)
 
 def augment_data(X, Y):
     augmented_X = []
@@ -77,14 +73,13 @@ def residual_block(x, filters):
     x = layers.Activation('relu')(x)
     return x
 
-def create_resnet_model(input_shape):
+# 簡略化したモデル構築
+def create_lightweight_model(input_shape):
     inputs = layers.Input(shape=input_shape)
-    x = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(inputs)
-    x = residual_block(x, 64)
-    x = residual_block(x, 64)
+    x = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(inputs)
     x = layers.Flatten()(x)
-    x = layers.Dense(128, activation='relu')(x)
-    outputs = layers.Dense(36, activation='softmax')(x)  # 6×6盤用
+    x = layers.Dense(64, activation='relu')(x)
+    outputs = layers.Dense(36, activation='softmax')(x)
     model = models.Model(inputs, outputs)
     model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
     return model
@@ -118,15 +113,128 @@ early_stopping = EarlyStopping(monitor='val_loss', patience=5)
 # ----------------------------
 # メイン処理
 # ----------------------------
-# 強いAIの代わりにランダムAIを模倣した例を使用（強いAIに置き換え可）
-class RandomAI:
-    def place(self, board, stone):
-        moves = get_valid_moves(board, stone)
-        return random.choice(moves) if moves else None
+import numpy as np
+import random
+
+class MCTS_AI:
+    def __init__(self, model=None):
+        self.model = model  # Optional: Trained model for enhanced evaluation
+
+    def evaluate(self, board, player):
+        """
+        Evaluate the board position using either a neural network model or a manual heuristic.
+        """
+        if self.model:
+            # Use the neural network model if provided
+            input_data = self.prepare_input(board, player)
+            score = self.model.predict(input_data)
+            return score
+        else:
+            # Fallback to manual heuristic evaluation
+            return self.manual_evaluation(board, player)
+
+    def prepare_input(self, board, player):
+        """
+        Prepare the board and player state for the neural network input.
+        """
+        return np.array([board.flatten(), player])  # Example placeholder
+
+    def manual_evaluation(self, board, player):
+        """
+        Manual heuristic evaluation of the board position.
+        """
+        opponent = 3 - player
+        player_score = np.sum(board == player)
+        opponent_score = np.sum(board == opponent)
+        return player_score - opponent_score
+
+    def get_valid_moves(self, board, player):
+        """
+        Generate a list of valid moves for the current player.
+        """
+        valid_moves = []
+        for x in range(board.shape[0]):
+            for y in range(board.shape[1]):
+                if self.is_valid_move(board, x, y, player):
+                    valid_moves.append((x, y))
+        return valid_moves
+
+    def is_valid_move(self, board, x, y, player):
+        """
+        Check if placing a piece at (x, y) is valid for the current player.
+        """
+        return board[x, y] == 0  # Example: Assume 0 indicates an empty spot
+
+    def apply_move(self, board, move, player):
+        """
+        Apply the player's move to the board.
+        """
+        new_board = board.copy()
+        x, y = move
+        new_board[x, y] = player
+        return new_board
+
+    def simulate(self, board, player):
+        """
+        Simulate a random game from the current position until the end.
+        """
+        current_player = player
+        while not self.is_terminal(board):
+            valid_moves = self.get_valid_moves(board, current_player)
+            if not valid_moves:
+                break
+            move = random.choice(valid_moves)
+            board = self.apply_move(board, move, current_player)
+            current_player = 3 - current_player
+        return self.evaluate(board, player)
+
+    def is_terminal(self, board):
+        """
+        Check if the game has reached a terminal state.
+        """
+        return not np.any(board == 0)  # Example: Terminal if no empty spots
+
+    def mcts_search(self, board, player, iterations=100):
+        """
+        Perform MCTS to select the best move.
+        """
+        scores = {}
+        counts = {}
+        valid_moves = self.get_valid_moves(board, player)
+
+        for move in valid_moves:
+            scores[move] = 0
+            counts[move] = 0
+
+        for _ in range(iterations):
+            move = random.choice(valid_moves)
+            new_board = self.apply_move(board, move, player)
+            score = self.simulate(new_board, 3 - player)
+            scores[move] += score
+            counts[move] += 1
+
+        best_move = max(valid_moves, key=lambda m: scores[m] / counts[m])
+        return best_move
+
+# Example usage
+if __name__ == "__main__":
+    board = np.zeros((3, 3))  # Example: 3x3 board for simplicity
+    ai = MCTS_AI()
+    player = 1
+    best_move = ai.mcts_search(board, player)
+    print("Best move:", best_move)
+
+
+
+    def evaluate_winner(self, board):
+        # 最も石が多いプレイヤーを勝者とする
+        flat_board = np.array(board).flatten()
+        return 1 if np.sum(flat_board == 1) > np.sum(flat_board == 2) else 2
+
 
 # データ生成
-ai = RandomAI()
-X_train, Y_train = generate_data_with_strong_ai(ai, num_samples=1000)
+ai = MCTS_AI()
+X_train, Y_train = generate_data_with_simple_ai(num_samples=200)
 
 # データ拡張
 X_train, Y_train = augment_data(X_train, Y_train)
@@ -136,7 +244,7 @@ X_train, Y_train = preprocess_data(X_train, Y_train)
 
 # モデル構築
 input_shape = (6, 6, 1)
-model = create_resnet_model(input_shape)
+model = create_lightweight_model(input_shape)
 
 # 訓練データと検証データに分割
 split_index = int(len(X_train) * 0.8)
@@ -144,13 +252,7 @@ X_train, X_val = X_train[:split_index], X_train[split_index:]
 Y_train, Y_val = Y_train[:split_index], Y_train[split_index:]
 
 # モデル訓練
-model.fit(
-    X_train, Y_train,
-    validation_data=(X_val, Y_val),
-    epochs=50,
-    batch_size=32,
-    callbacks=[lr_scheduler, early_stopping]
-)
+model.fit(X_train, Y_train, epochs=10, batch_size=64, validation_split=0.2)
 
 # モデル保存
 model.save('strong_othello_model_6x6.h5')
@@ -171,17 +273,22 @@ class FlowerAI:
         input_board = np.array(board).reshape(-1, 6, 6, 1)  # 6x6の入力形式
         predictions = self.model.predict(input_board)
 
-        # 最適な手のインデックスを取得
-        move_index = np.argmax(predictions)
-        x, y = move_index % 6, move_index // 6  # インデックスを(x, y)形式に変換
-
-        # 有効な手であることを確認
+        # 全ての手をスコアリングし、最適な手を選ぶ
         valid_moves = self.valid_moves(board, stone)
-        if (x, y) in valid_moves:
-            return x, y
-        else:
-            # 有効な手がない場合は最初の有効な手を選ぶ
-            return valid_moves[0] if valid_moves else None
+        if not valid_moves:
+            return None  # 有効な手がない場合
+
+        best_move = None
+        best_score = -float('inf')  # スコアの初期値を低い値に設定
+        for move in valid_moves:
+            x, y = move
+            move_index = y * 6 + x
+            score = predictions[0][move_index] + self.evaluate(board, move, stone)  # モデルのスコアと評価関数を足す
+            if score > best_score:
+                best_score = score
+                best_move = move
+
+        return best_move
 
     def valid_moves(self, board, stone):
         # 有効な手をリストアップ
@@ -204,3 +311,38 @@ class FlowerAI:
                         moves.append((x, y))
                         break
         return moves
+
+    def evaluate(self, board, move, stone):
+        x, y = move
+        opponent = 3 - stone
+        value = 0
+
+        # 評価マトリックス（角・辺・中央を重視）
+        evaluation_matrix = np.array([
+            [100, -10, 10, 10, -10, 100],
+            [-10, -50, 5, 5, -50, -10],
+            [10, 5, 1, 1, 5, 10],
+            [10, 5, 1, 1, 5, 10],
+            [-10, -50, 5, 5, -50, -10],
+            [100, -10, 10, 10, -10, 100],
+        ])
+        value += evaluation_matrix[y][x]
+
+        # 安定石の評価
+        stable_bonus = 0
+        if (x, y) in [(0, 0), (0, 5), (5, 0), (5, 5)]:
+            stable_bonus += 50  # 角の安定石は特に高評価
+        value += stable_bonus
+
+        # リスク領域のペナルティ（角の隣）
+        risk_positions = [(0, 1), (1, 0), (0, 4), (1, 5), (4, 0), (5, 1), (5, 4), (4, 5)]
+        if (x, y) in risk_positions:
+            value -= 20  # リスクのある場所は評価を下げる
+
+        # 次の手の自由度を考慮
+        board_copy = np.array(board)
+        board_copy[y][x] = stone
+        next_valid_moves = self.valid_moves(board_copy, opponent)
+        value -= len(next_valid_moves) * 10  # 相手の手数が増えると評価を下げる
+
+        return value
